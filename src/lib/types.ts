@@ -62,6 +62,15 @@ export interface Settings {
   apiKeyHint?: string; // e.g. "sk-ant-…a1b2"
   defaultModel?: string;
   monthlyLimitUsd?: number;
+  /** Phase 6: outgoing email (SMTP). Password encrypted. */
+  email?: { host: string; port: number; secure: boolean; user?: string; pass?: string; from: string };
+  /** Phase 6: public address of this Luma, used in email links (e.g. https://luma.studio93.io). */
+  appUrl?: string;
+  /** Encrypted GitHub token (fine-grained or classic PAT) used for push, repos, PRs and Pages. */
+  githubToken?: string;
+  githubUser?: string;
+  /** Encrypted Claude subscription token (from `claude setup-token`), for servers without a Claude Code login. */
+  claudeOauthToken?: string;
   /** Encrypted deploy tokens (Phase 4). */
   deployTokens?: { netlify?: string; vercel?: string };
 }
@@ -144,6 +153,34 @@ export interface User {
   role: "admin" | "member";
   createdAt: string;
   lastSeenAt?: string;
+  /** Phase 6: email notifications: off, right away (important ones), or a daily digest. */
+  notifyEmail?: "off" | "instant" | "daily";
+  lastDigestAt?: string;
+}
+
+/** Phase 6: something that needs a person's attention. userId is "local" in single-user mode. */
+export type NotificationKind = "waiting" | "review" | "failed" | "approval" | "mention" | "memory_review" | "deploy" | "autopilot" | "invite";
+
+export interface Notification {
+  id: string;
+  userId: string;
+  workspaceId: string;
+  ticketId?: string | null;
+  kind: NotificationKind;
+  title: string;
+  body: string;
+  /** In-app path to open, e.g. /w/ws_x/board?ticket=tk_y */
+  link: string;
+  readAt?: string | null;
+  emailedAt?: string | null;
+  createdAt: string;
+}
+
+/** Phase 6: password reset tokens (sha256), valid one hour. */
+export interface PasswordReset {
+  id: string;
+  userId: string;
+  expiresAt: string;
 }
 
 export interface Session {
@@ -288,6 +325,42 @@ export interface Ticket {
   forceStart?: boolean;
   /** How many times an interrupted run was resumed automatically. */
   resumeCount?: number;
+  /** Code review state (IDE review panel). */
+  review?: TicketReview;
+}
+
+export interface TicketReview {
+  /** Files the reviewer marked as viewed / accepted. */
+  viewed?: string[];
+  verdict?: "approved" | "changes_requested";
+  by?: string;
+  at?: string;
+}
+
+export interface ReviewComment {
+  id: string;
+  /** User id, "user" (single-user mode) or "reviewer" (AI review). */
+  author: string;
+  authorName: string;
+  text: string;
+  createdAt: string;
+}
+
+/** A line comment thread, like a pull-request review comment. */
+export interface ReviewThread {
+  id: string;
+  workspaceId: string;
+  path: string;
+  /** 1-based line in the file when the thread was created. */
+  line: number;
+  /** Text of that line, used to re-anchor the thread when the file changes. */
+  lineText: string;
+  ticketId: string | null;
+  status: "open" | "resolved";
+  severity?: "info" | "warning" | "error";
+  comments: ReviewComment[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type TicketEventType =
@@ -410,6 +483,9 @@ export interface DB {
   users: User[];
   sessions: Session[];
   invites: Invite[];
+  notifications: Notification[];
+  resets: PasswordReset[];
+  reviewThreads: ReviewThread[];
 }
 
 /** Live events streamed to the UI while an agent works. */
@@ -427,4 +503,6 @@ export type LiveEvent =
   | { kind: "command_output"; runId: string; chunk: string }
   | { kind: "deploy"; deploy: Deploy }
   | { kind: "git"; workspaceId: string }
+  | { kind: "review"; workspaceId: string }
+  | { kind: "notification"; userIds: string[] }
   | { kind: "run_error"; ticketId: string; message: string };

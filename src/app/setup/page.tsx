@@ -15,10 +15,9 @@ const KEY_STEPS = [
 ];
 
 const LOGIN_STEPS = [
-  { title: "Open Terminal", body: "Any folder is fine." },
-  { title: "Start Claude Code", body: "Run: npx @anthropic-ai/claude-code   (or just `claude` if you have it installed)." },
-  { title: "Sign in", body: "Type /login, choose “Claude account”, and sign in with the account your company gave you in the browser window." },
-  { title: "Come back here", body: "Click “Connect my Claude account”. Luma uses that same login." },
+  { title: "Already use Claude Code here?", body: "Leave the token empty and click Connect: Luma uses that login." },
+  { title: "Otherwise, create a subscription token once", body: "On any computer with Claude Code, run the command below and sign in with your Claude account. It prints a long-lived token." },
+  { title: "Paste it above", body: "Luma encrypts it and uses it for every agent run, on this computer or a server." },
 ];
 
 type Mode = "claude_account" | "api_key";
@@ -27,6 +26,7 @@ export default function SetupPage() {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>("claude_account");
   const [key, setKey] = useState("");
+  const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
@@ -39,7 +39,7 @@ export default function SetupPage() {
     try {
       const res = await api<{ account?: { email?: string; subscriptionType?: string } }>("/api/settings", {
         method: "POST",
-        json: mode === "claude_account" ? { authMode: "claude_account" } : { apiKey: key },
+        json: mode === "claude_account" ? { authMode: "claude_account", claudeToken: token.trim() || undefined } : { apiKey: key },
       });
       setDone(
         mode === "claude_account"
@@ -102,8 +102,12 @@ export default function SetupPage() {
               {mode === "claude_account" ? (
                 <div className="mt-4 space-y-3">
                   <p className="text-sm text-muted">
-                    Agents use the Claude login saved by Claude Code on this computer, and their work counts toward your plan's normal usage limits. No API key needed.
+                    Agents use your Claude plan, and their work counts toward its normal usage limits. No API key needed. If Claude Code is already signed in on this computer, just connect.
                   </p>
+                  <div>
+                    <label className="label" htmlFor="ctoken">Subscription token <span className="font-normal text-muted">(optional: for servers, or if this computer isn't signed in)</span></label>
+                    <input id="ctoken" type="password" className="input font-mono" placeholder="sk-ant-oat01-…" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" />
+                  </div>
                   <ErrorNote message={error} />
                   <button className="btn btn-primary w-full !h-10" onClick={() => connect()} disabled={busy}>
                     {busy ? "Checking your login…" : "Connect my Claude account"}
@@ -154,7 +158,7 @@ export default function SetupPage() {
                     ))}
                     {mode === "claude_account" ? (
                       <pre className="flex items-center gap-2 text-xs bg-panel-2 rounded-lg px-3 py-2 font-mono">
-                        <Terminal size={12} /> npx @anthropic-ai/claude-code
+                        <Terminal size={12} /> claude setup-token
                       </pre>
                     ) : (
                       <a className="btn btn-sm mt-1" href="https://platform.claude.com/settings/keys" target="_blank" rel="noreferrer">

@@ -6,6 +6,7 @@ import { getTemplate } from "./templates";
 import { initWorkspaceFiles, removeWorkspaceFiles } from "./files";
 import { currentUser } from "./auth";
 import type {
+  DB,
   Agent,
   ApprovalMode,
   Label,
@@ -94,6 +95,7 @@ export async function deleteWorkspace(id: string) {
     db.commandRuns = db.commandRuns.filter((r) => r.workspaceId !== id);
     db.deploys = db.deploys.filter((d) => d.workspaceId !== id);
     db.secrets = db.secrets.filter((s) => s.workspaceId !== id);
+    db.reviewThreads = (db.reviewThreads ?? []).filter((r) => r.workspaceId !== id);
   });
   await removeWorkspaceFiles(id);
 }
@@ -173,7 +175,18 @@ export async function addEvent(
     return db.tickets.find((t) => t.id === ticketId)?.workspaceId;
   });
   if (wsId) publish(wsId, { kind: "event", ticketId, event });
+  if (type === "comment") void import("./notifications").then((n) => n.onComment(ticketId, actor, content)).catch(() => undefined);
   return event;
+}
+
+/** Agents and dependencies referenced by a ticket must live in the same workspace. */
+function checkRefs(db: DB, workspaceId: string, ref: { assigneeId?: string | null; dependsOn?: string[]; parentId?: string | null }, selfId?: string) {
+  if (ref.assigneeId && !db.agents.some((a) => a.id === ref.assigneeId && a.workspaceId === workspaceId)) throw new Error("That agent isn't part of this workspace.");
+  if (ref.parentId && !db.tickets.some((t) => t.id === ref.parentId && t.workspaceId === workspaceId)) throw new Error("Parent ticket isn't in this workspace.");
+  for (const d of ref.dependsOn ?? []) {
+    if (d === selfId) throw new Error("A ticket can't depend on itself.");
+    if (!db.tickets.some((t) => t.id === d && t.workspaceId === workspaceId)) throw new Error("A dependency isn't in this workspace.");
+  }
 }
 
 export async function createTicket(input: {
@@ -191,6 +204,7 @@ export async function createTicket(input: {
   chainDepth?: number;
 }) {
   const ticket = await mutate((db) => {
+    checkRefs(db, input.workspaceId, input);
     const number = db.tickets.filter((t) => t.workspaceId === input.workspaceId).reduce((m, t) => Math.max(m, t.number), 0) + 1;
     const t: Ticket = {
       id: newId("tk"),
@@ -222,6 +236,7 @@ export async function updateTicket(id: string, patch: Partial<Ticket>, actor = "
   const { ticket, changes } = await mutate((db) => {
     const t = db.tickets.find((x) => x.id === id);
     if (!t) throw new Error("Ticket not found");
+    checkRefs(db, t.workspaceId, { assigneeId: patch.assigneeId, dependsOn: patch.dependsOn }, t.id);
     const changes: { type: TicketEventType; content: string }[] = [];
     if (patch.status && patch.status !== t.status) {
       changes.push({ type: "status_change", content: `${t.status} → ${patch.status}` });
@@ -242,11 +257,15 @@ export async function updateTicket(id: string, patch: Partial<Ticket>, actor = "
     if (patch.pendingHandoff !== undefined) t.pendingHandoff = patch.pendingHandoff;
     if (patch.forceStart !== undefined) t.forceStart = patch.forceStart || undefined;
     if (patch.resumeCount !== undefined) t.resumeCount = patch.resumeCount;
+    if (patch.review !== undefined) t.review = patch.review;
     t.updatedAt = now();
     return { ticket: { ...t }, changes };
   });
   for (const c of changes) await addEvent(id, actor, c.type, c.content);
   publish(ticket.workspaceId, { kind: "ticket", ticket });
+  if (changes.some((c) => c.type === "status_change")) {
+    void import("./notifications").then((n) => n.onTicketStatus(ticket, ticket.status, actor)).catch((err) => console.error("[luma notify]", err));
+  }
   return ticket;
 }
 
@@ -254,6 +273,7 @@ export async function deleteTicket(id: string) {
   await mutate((db) => {
     db.tickets = db.tickets.filter((t) => t.id !== id);
     db.events = db.events.filter((e) => e.ticketId !== id);
+    db.reviewThreads = (db.reviewThreads ?? []).filter((r) => r.ticketId !== id);
     for (const t of db.tickets) {
       if (t.parentId === id) t.parentId = null;
       if (t.dependsOn?.includes(id)) t.dependsOn = t.dependsOn.filter((d) => d !== id);

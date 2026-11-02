@@ -43,7 +43,7 @@ export const POST = handle(async (req: Request, { params }: P) => {
     });
     return ok({ added: { name: user.name, email, role } }, 201);
   }
-  const invite = await createInvite({ email, role: "member", workspaceId: id, workspaceRole: role, createdBy: currentUser()!.id });
+  const invite = await createInvite({ email, role: "member", workspaceId: id, workspaceRole: role, createdBy: currentUser()!.id, origin: new URL(req.url).origin });
   return ok({ invite }, 201);
 });
 

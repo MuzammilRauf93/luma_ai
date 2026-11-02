@@ -213,6 +213,20 @@ export async function upsertMemory(input: {
     return { memory: m, created: true, pending: needsReview };
   });
   publish(input.workspaceId, { kind: "memory", workspaceId: input.workspaceId });
+  if (res.pending) {
+    const who = db0.agents.find((a) => a.id === input.authorId)?.name ?? "An agent";
+    void import("./notifications")
+      .then((n) =>
+        n.notify({
+          workspaceId: input.workspaceId,
+          kind: "memory_review",
+          title: `${who} proposed a team ${res.memory.kind}: “${res.memory.title}”`,
+          body: (res.memory.proposal?.content ?? res.memory.content).slice(0, 240),
+          link: `/w/${input.workspaceId}/memory`,
+        }),
+      )
+      .catch(() => undefined);
+  }
   return res;
 }
 

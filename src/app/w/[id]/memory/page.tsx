@@ -1,5 +1,6 @@
 "use client";
 
+import { confirmDialog, promptDialog, toast } from "@/components/Dialogs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
 import { Brain, Check, Copy, Pencil, Pin, PinOff, Plus, Search, Trash2, X } from "lucide-react";
@@ -66,7 +67,7 @@ export default function MemoryPage() {
     reload();
   };
   const remove = async (m: Memory) => {
-    if (!confirm(`Forget “${m.title}”? Agents won't see it any more.`)) return;
+    if (!(await confirmDialog({ title: `Forget “${m.title}”?`, body: "Agents won't see it any more.", confirmLabel: "Forget", danger: true }))) return;
     await api(`/api/memory/${m.id}`, { method: "DELETE" });
     load();
   };

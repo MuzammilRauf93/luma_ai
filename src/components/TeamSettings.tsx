@@ -1,7 +1,8 @@
 "use client";
 
+import { confirmDialog, promptDialog, toast } from "./Dialogs";
 import { useCallback, useEffect, useState } from "react";
-import { Copy, ShieldCheck, Trash2, UserPlus, Users } from "lucide-react";
+import { Copy, KeyRound, ShieldCheck, Trash2, UserPlus, Users } from "lucide-react";
 import { api, timeAgo } from "@/lib/client";
 import { ErrorNote } from "./ui";
 
@@ -100,7 +101,18 @@ export function TeamSettings() {
                   </td>
                   <td className="py-2 pl-1 w-8">
                     {u.id !== me.user?.id && (
-                      <button className="btn btn-ghost btn-sm btn-danger !px-1.5" onClick={() => confirm(`Remove ${u.name}'s account?`) && run(() => api(`/api/users/${u.id}`, { method: "DELETE" }))} aria-label="Remove">
+                      <button
+                        className="btn btn-ghost btn-sm !px-1.5"
+                        title="Create a password reset link for them"
+                        onClick={() => run(async () => { const r = await api<{ path: string }>(`/api/users/${u.id}`, { method: "PATCH", json: { resetLink: true } }); setLink(window.location.origin + r.path); })}
+                      >
+                        <KeyRound size={12} />
+                      </button>
+                    )}
+                  </td>
+                  <td className="py-2 pl-1 w-8">
+                    {u.id !== me.user?.id && (
+                      <button className="btn btn-ghost btn-sm btn-danger !px-1.5" onClick={async () => (await confirmDialog({ title: `Remove ${u.name}'s account?`, body: "They're signed out and lose access to every workspace.", confirmLabel: "Remove", danger: true })) && run(() => api(`/api/users/${u.id}`, { method: "DELETE" }))} aria-label="Remove">
                         <Trash2 size={12} />
                       </button>
                     )}
@@ -114,8 +126,8 @@ export function TeamSettings() {
             onSubmit={(e) => {
               e.preventDefault();
               run(async () => {
-                const r = await api<{ path: string }>("/api/users", { method: "POST", json: invite });
-                setLink(window.location.origin + r.path);
+                const r = await api<{ path: string; emailed?: boolean }>("/api/users", { method: "POST", json: invite });
+                setLink(window.location.origin + r.path + (r.emailed ? "#emailed" : ""));
                 setInvite({ email: "", role: "member" });
               });
             }}
@@ -140,15 +152,22 @@ export function TeamSettings() {
 
 export function InviteLink({ link }: { link: string }) {
   const [copied, setCopied] = useState(false);
+  const clean = link.replace(/#emailed$/, "");
   return (
     <div className="mt-3 rounded-lg border bg-panel-2 p-2.5">
-      <div className="text-xs text-muted mb-1">Send this link to them (valid 7 days, works once). Luma doesn't send emails.</div>
+      <div className="text-xs text-muted mb-1">
+        {link.endsWith("#emailed")
+          ? "We emailed this link to them. You can also send it yourself."
+          : link.includes("/reset/")
+            ? "Password reset link: send it to them. It works once, for one hour."
+            : "Send this link to them (valid 7 days, works once). Set up Email in Settings to have Luma send it."}
+      </div>
       <div className="flex gap-2">
-        <input className="input !py-1 !text-xs font-mono" readOnly value={link} onFocus={(e) => e.target.select()} />
+        <input className="input !py-1 !text-xs font-mono" readOnly value={clean} onFocus={(e) => e.target.select()} />
         <button
           className="btn btn-sm"
           onClick={() => {
-            navigator.clipboard?.writeText(link).then(() => {
+            navigator.clipboard?.writeText(clean).then(() => {
               setCopied(true);
               setTimeout(() => setCopied(false), 1500);
             });

@@ -1,5 +1,6 @@
 "use client";
 
+import { confirmDialog, promptDialog, toast } from "./Dialogs";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import clsx from "clsx";
@@ -56,7 +57,7 @@ export function DiffModal({ target, onClose, onUndone }: { target: DiffTarget; o
   const undo = async () => {
     if (!workspace || !data) return;
     const what = data.before === null ? `delete ${data.path} (it didn't exist before)` : `put ${data.path} back the way it was before`;
-    if (!confirm(`Undo this? Luma will ${what}. You can redo it from version history.`)) return;
+    if (!(await confirmDialog({ title: "Undo this change?", body: `Luma will ${what}. You can redo it from History.`, confirmLabel: "Undo" }))) return;
     setBusy(true);
     try {
       const json = "checkpointId" in target ? { checkpointId: target.checkpointId } : { ticketId: target.ticketId, path: target.path };

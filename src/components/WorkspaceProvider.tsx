@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { useSearchParams } from "next/navigation";
 import { api, type TicketView } from "@/lib/client";
 import type { Agent, LiveEvent, Workspace, WorkspaceRole } from "@/lib/types";
 
@@ -53,6 +54,9 @@ export function WorkspaceProvider({ id, children }: { id: string; children: Reac
   const [eventVersion, setEventVersion] = useState(0);
   const [memoryVersion, setMemoryVersion] = useState(0);
   const [myRole, setMyRole] = useState<WorkspaceRole | null>("owner");
+  // Deep links from notifications: /w/<id>/board?ticket=<ticketId> opens that ticket.
+  const ticketParam = useSearchParams().get("ticket");
+
   const [me, setMe] = useState<{ id: string; name: string } | null>(null);
   useEffect(() => {
     api<{ user: { id: string; name: string } | null }>("/api/auth/me").then((m) => setMe(m.user)).catch(() => undefined);
@@ -93,6 +97,10 @@ export function WorkspaceProvider({ id, children }: { id: string; children: Reac
     setActivity([]);
     setOpenTicketId(null);
   }, [reload]);
+
+  useEffect(() => {
+    if (ticketParam) setOpenTicketId(ticketParam);
+  }, [ticketParam]);
 
   useEffect(() => {
     const es = new EventSource(`/api/workspaces/${id}/stream`);
@@ -136,6 +144,9 @@ export function WorkspaceProvider({ id, children }: { id: string; children: Reac
         case "memory":
           setMemoryVersion((v) => v + 1);
           window.dispatchEvent(new Event("luma:workspaces"));
+          return;
+        case "notification":
+          window.dispatchEvent(new Event("luma:notify"));
           return;
         case "workspace":
           setWorkspace(e.workspace);

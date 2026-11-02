@@ -1,10 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { confirmDialog, promptDialog, toast } from "@/components/Dialogs";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import clsx from "clsx";
+import { GitHubSettings, SystemSettings } from "@/components/SystemSettings";
 import Link from "next/link";
-import { KeyRound, Trash2 } from "lucide-react";
+import { BarChart3, KeyRound, Mail, Plug, Server, Sparkles, Trash2, UserRound, Users } from "lucide-react";
 import { api, fmtTokens, fmtUsd } from "@/lib/client";
 import { TeamSettings } from "@/components/TeamSettings";
+import { EmailSettings, ProfileSettings } from "@/components/AccountSettings";
 import { ErrorNote, PageHeader } from "@/components/ui";
 import type { Workspace } from "@/lib/types";
 
@@ -16,6 +21,8 @@ interface SettingsData {
   defaultModel: string | null;
   monthlyLimitUsd: number | null;
   deployAccounts?: { netlify: boolean; vercel: boolean };
+  github?: string | null;
+  claudeToken?: boolean;
 }
 type Bucket = { tokens: number; cost: number };
 interface Usage {
@@ -24,7 +31,32 @@ interface Usage {
   byWorkspace: Record<string, Bucket>;
 }
 
-export default function SettingsPage() {
+const TABS = [
+  { id: "general", label: "Claude & models", icon: Sparkles, admin: false },
+  { id: "profile", label: "Profile", icon: UserRound, admin: false },
+  { id: "team", label: "Team", icon: Users, admin: true },
+  { id: "integrations", label: "Integrations", icon: Plug, admin: true },
+  { id: "email", label: "Email", icon: Mail, admin: true },
+  { id: "usage", label: "Usage & limits", icon: BarChart3, admin: true },
+  { id: "system", label: "System", icon: Server, admin: true },
+] as const;
+
+export default function SettingsPageWrapper() {
+  return (
+    <Suspense>
+      <SettingsPage />
+    </Suspense>
+  );
+}
+
+function SettingsPage() {
+  const params = useSearchParams();
+  const [isAdmin, setIsAdmin] = useState(true);
+  useEffect(() => {
+    api<{ authEnabled: boolean; user: { role: string } | null }>("/api/auth/me").then((m) => setIsAdmin(!m.authEnabled || m.user?.role === "admin")).catch(() => undefined);
+  }, []);
+  const requested = params.get("tab") ?? "general";
+  const tab = TABS.some((t) => t.id === requested && (!t.admin || isAdmin)) ? requested : "general";
   const [s, setS] = useState<SettingsData | null>(null);
   const [models, setModels] = useState<{ id: string; name: string }[]>([]);
   const [usage, setUsage] = useState<Usage | null>(null);
@@ -38,7 +70,7 @@ export default function SettingsPage() {
     setS(st);
     setLimit(st.monthlyLimitUsd ? String(st.monthlyLimitUsd) : "");
     if (st.connected) api<{ models: typeof models }>("/api/models").then((d) => setModels(d.models)).catch((e) => setError(e.message));
-    api<Usage>("/api/usage").then(setUsage);
+    api<Usage>("/api/usage").then(setUsage).catch(() => undefined);
     api<{ workspaces: Workspace[] }>("/api/workspaces").then((d) => setWorkspaces(d.workspaces));
   };
   useEffect(() => {
@@ -58,7 +90,7 @@ export default function SettingsPage() {
   };
 
   const disconnect = async () => {
-    if (!confirm("Disconnect your Claude account? Agents will stop working until you add a key again.")) return;
+    if (!(await confirmDialog({ title: "Disconnect Claude?", body: "Agents stop working until you connect again.", confirmLabel: "Disconnect", danger: true }))) return;
     await api("/api/settings", { method: "DELETE" });
     load();
   };
@@ -66,9 +98,26 @@ export default function SettingsPage() {
   const overLimit = usage && s?.monthlyLimitUsd ? usage.month.cost / s.monthlyLimitUsd : 0;
 
   return (
-    <div className="max-w-3xl mx-auto px-4 md:px-8 py-8">
-      <PageHeader title="Settings" subtitle="Your Claude connection, default model, usage, team and deploy accounts." />
-
+    <div className="max-w-5xl mx-auto px-4 md:px-8 py-8">
+      <PageHeader title="Settings" subtitle="Everything Luma needs, in one place." />
+      <div className="grid md:grid-cols-[200px_minmax(0,1fr)] gap-6 items-start">
+        <nav className="md:sticky md:top-4 flex md:flex-col gap-1 overflow-x-auto scroll-thin pb-1" aria-label="Settings sections">
+          {TABS.filter((t) => !t.admin || isAdmin).map((t) => (
+            <Link
+              key={t.id}
+              href={`/settings?tab=${t.id}`}
+              className={clsx(
+                "flex items-center gap-2 px-3 py-2 rounded-lg text-sm whitespace-nowrap",
+                tab === t.id ? "bg-accent-soft text-accent-ink font-medium" : "text-muted hover:text-ink hover:bg-panel-2",
+              )}
+            >
+              <t.icon size={15} /> {t.label}
+            </Link>
+          ))}
+        </nav>
+        <div className="min-w-0">
+          {tab === "general" && (
+            <>
       <section className="card p-5 mb-5">
         <h2 className="font-semibold mb-3">Claude connection</h2>
         {s?.connected ? (
@@ -80,7 +129,7 @@ export default function SettingsPage() {
               {s.authMode === "claude_account" ? (
                 <>
                   <div className="text-sm font-medium">Claude account{s.account?.subscriptionType ? ` · ${s.account.subscriptionType} plan` : ""}</div>
-                  <div className="text-xs text-muted">{[s.account?.email, s.account?.organization].filter(Boolean).join(" · ")}</div>
+                  <div className="text-xs text-muted">{[s.account?.email, s.account?.organization, s.claudeToken ? "sign-in token stored securely in Luma" : "signed in on this computer"].filter(Boolean).join(" · ")}</div>
                 </>
               ) : (
                 <>
@@ -117,6 +166,10 @@ export default function SettingsPage() {
         </select>
       </section>
 
+            </>
+          )}
+          {tab === "usage" && (
+            <>
       <section className="card p-5 mb-5">
         <h2 className="font-semibold">Usage</h2>
         <p className="text-sm text-muted mb-4">
@@ -162,13 +215,19 @@ export default function SettingsPage() {
           </tbody>
         </table>
       </section>
-      <TeamSettings />
-
+            </>
+          )}
+          {tab === "profile" && <ProfileSettings />}
+          {tab === "team" && <TeamSettings />}
+          {tab === "email" && <EmailSettings />}
+          {tab === "integrations" && (
+            <>
+              <GitHubSettings connected={s?.github ?? null} onChange={load} />
       <section className="card p-5 mb-5">
         <h2 className="font-semibold">Deploy accounts</h2>
         <p className="text-sm text-muted mb-3">
           Connect a hosting account to publish workspaces with one click from each workspace's Ship page. Tokens are encrypted on this computer.
-          GitHub Pages uses your GitHub login instead (the <code>gh</code> CLI).
+          GitHub Pages uses the GitHub connection above.
         </p>
         <div className="space-y-2">
           {(
@@ -181,8 +240,13 @@ export default function SettingsPage() {
           ))}
         </div>
       </section>
+            </>
+          )}
+          {tab === "system" && <SystemSettings />}
       {msg && <p className="text-sm text-success">{msg}</p>}
       <ErrorNote message={error} />
+        </div>
+      </div>
     </div>
   );
 }

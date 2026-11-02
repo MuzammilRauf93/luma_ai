@@ -103,8 +103,8 @@ export function ShareModal({ open, onClose }: { open: boolean; onClose: () => vo
               onSubmit={(e) => {
                 e.preventDefault();
                 run(async () => {
-                  const r = await api<{ added?: { name: string }; invite?: { path: string } }>(`/api/workspaces/${workspace.id}/members`, { method: "POST", json: { email, role } });
-                  setLink(r.invite ? window.location.origin + r.invite.path : null);
+                  const r = await api<{ added?: { name: string }; invite?: { path: string; emailed?: boolean } }>(`/api/workspaces/${workspace.id}/members`, { method: "POST", json: { email, role } });
+                  setLink(r.invite ? window.location.origin + r.invite.path + (r.invite.emailed ? "#emailed" : "") : null);
                   setNote(r.added ? `${r.added.name} now has access.` : null);
                   setEmail("");
                 });

@@ -1,5 +1,6 @@
 "use client";
 
+import { confirmDialog, promptDialog, toast } from "@/components/Dialogs";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import clsx from "clsx";
@@ -25,7 +26,7 @@ import { ErrorNote, PageHeader } from "@/components/ui";
 import { api, timeAgo } from "@/lib/client";
 import type { Deploy, DeployProvider, DeployTarget, GitSettings } from "@/lib/types";
 
-type GitTools = { git: boolean; gh: boolean; ghAuthed: boolean; ghUser?: string };
+type GitTools = { git: boolean; gh: boolean; ghAuthed: boolean; ghUser?: string; token?: string | null };
 type GitStatus =
   | { repo: false; settings: GitSettings; tools: GitTools }
   | {
@@ -131,12 +132,18 @@ function GitCard({ status, reload }: { status: GitStatus | null; reload: () => P
       <div className="flex items-center gap-2 mb-1">
         <Github size={18} />
         <h2 className="font-semibold">GitHub</h2>
-        {status?.tools.ghAuthed && <span className="chip ml-auto">gh: {status.tools.ghUser ?? "signed in"}</span>}
+        {status?.tools.token ? (
+          <span className="chip ml-auto">GitHub: {status.tools.token}</span>
+        ) : status?.tools.ghAuthed ? (
+          <span className="chip ml-auto">gh: {status.tools.ghUser ?? "signed in"}</span>
+        ) : (
+          <Link className="chip ml-auto hover:text-ink" href="/settings?tab=integrations">Connect GitHub</Link>
+        )}
       </div>
       {!status ? (
         <p className="text-sm text-muted">Loading…</p>
       ) : !status.tools.git ? (
-        <p className="text-sm text-muted">Git isn't installed on this computer. Run <code>xcode-select --install</code> in Terminal, then reload.</p>
+        <p className="text-sm text-muted">Git isn't installed on this computer. See <Link className="text-accent-ink underline" href="/settings?tab=system">Settings → System</Link> for what's missing and how to fix it.</p>
       ) : !status.repo ? (
         <div className="space-y-3">
           <p className="text-sm text-muted">Turn on version control and Luma saves a commit after every agent run, written as that agent, so you can see and share exactly what changed.</p>
@@ -206,9 +213,9 @@ function GitCard({ status, reload }: { status: GitStatus | null; reload: () => P
               </div>
               {remoteTab === "create" ? (
                 <>
-                  {!status.tools.gh || !status.tools.ghAuthed ? (
+                  {!status.tools.token && (!status.tools.gh || !status.tools.ghAuthed) ? (
                     <p className="text-xs text-warning">
-                      Needs the GitHub CLI signed in: run <code>brew install gh</code> and <code>gh auth login</code> in Terminal, then reload.
+                      Connect your GitHub account in <Link className="underline" href="/settings?tab=integrations">Settings → Integrations</Link> first.
                     </p>
                   ) : null}
                   <div className="flex gap-2">
@@ -404,7 +411,7 @@ function SecretsCard() {
     }
   };
   const remove = async (n: string) => {
-    if (!confirm(`Delete ${n}?`)) return;
+    if (!(await confirmDialog({ title: `Delete the secret ${n}?`, body: "Commands and builds won't get it any more.", confirmLabel: "Delete", danger: true }))) return;
     await api(`/api/workspaces/${workspace.id}/secrets?name=${encodeURIComponent(n)}`, { method: "DELETE" });
     load();
   };

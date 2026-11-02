@@ -241,6 +241,10 @@ export async function snapshot(wsId: string) {
 export async function recordChanges(wsId: string, before: Awaited<ReturnType<typeof snapshot>>, actor: string, ticketId: string | null) {
   const after = await snapshot(wsId);
   const changed: string[] = [];
+  const done = async () => {
+    if (changed.length) await (await import("./files")).syncChanged(wsId, changed);
+    return changed;
+  };
   for (const [p, a] of after) {
     const b = before.get(p);
     if (!b) {
@@ -257,7 +261,7 @@ export async function recordChanges(wsId: string, before: Awaited<ReturnType<typ
       if (b.content !== null) await recordCheckpoint(wsId, p, b.content, null, { actor, ticketId });
     }
   }
-  return changed;
+  return done();
 }
 
 // ---------------------------------------------------------------- running
@@ -336,6 +340,7 @@ export async function runCommand(opts: {
     const onOuterAbort = () => ctrl.abort();
     opts.signal?.addEventListener("abort", onOuterAbort);
     await saveRun(base);
+    await (await import("./fileMirror")).pull(ws.id, true); // run on the latest files from every host
     const before = await snapshot(ws.id);
     const secrets = await secretEnv(ws.id);
     const started = Date.now();

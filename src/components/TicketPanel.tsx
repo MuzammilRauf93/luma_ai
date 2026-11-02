@@ -1,5 +1,6 @@
 "use client";
 
+import { confirmDialog, promptDialog, toast } from "./Dialogs";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import clsx from "clsx";
@@ -107,7 +108,7 @@ export function TicketPanel() {
   }, [loadChanges, fileVersion]);
 
   const undoAll = async () => {
-    if (!workspace || !confirm(`Undo every file change this ticket made (${changes.length} file${changes.length > 1 ? "s" : ""})? Files go back to how they were before the ticket. You can redo from version history.`)) return;
+    if (!workspace || !(await confirmDialog({ title: `Undo all changes from this ticket?`, body: `${changes.length} file${changes.length > 1 ? "s go" : " goes"} back to how they were before the ticket. You can redo from History.`, confirmLabel: "Undo all", danger: true }))) return;
     try {
       await api(`/api/workspaces/${workspace.id}/checkpoints`, { method: "POST", json: { ticketId: openTicketId } });
       await api(`/api/tickets/${openTicketId}/comments`, { method: "POST", json: { text: "↩️ Undid all file changes from this ticket." } });
@@ -203,7 +204,7 @@ export function TicketPanel() {
   };
 
   const remove = async () => {
-    if (!confirm("Delete this ticket and its history?")) return;
+    if (!(await confirmDialog({ title: "Delete this ticket?", body: "Its history and comments are deleted too.", confirmLabel: "Delete", danger: true }))) return;
     try {
       await api(`/api/tickets/${openTicketId}`, { method: "DELETE" });
       openTicket(null);

@@ -49,7 +49,7 @@ function loadPg(): { Pool: new (cfg: Record<string, unknown>) => PgPool; Client:
     const req = createRequire(path.join(process.cwd(), "package.json"));
     return req("pg");
   } catch {
-    throw new Error("LUMA_DATABASE_URL is set but the `pg` package isn't installed. Run `npm install pg`.");
+    throw new Error("LUMA_DATABASE_URL is set but the `pg` package isn't installed. Install it in Settings → System (or run npm install).");
   }
 }
 
@@ -68,7 +68,16 @@ function snapshot(db: DB): Snap {
   return s;
 }
 
-export async function createPgDriver(url: string, hooks: { onRemoteChange: () => void }): Promise<Driver & { notifyLive: (payload: string) => Promise<void>; onLive: (fn: (payload: string) => void) => void }> {
+export type PgExtras = {
+  notifyLive: (payload: string) => Promise<void>;
+  onLive: (fn: (payload: string) => void) => void;
+  /** Raw query on the shared pool (used by the file mirror). */
+  query: PgPool["query"];
+  /** Subscribe to another NOTIFY channel. */
+  listen: (channel: string, fn: (payload: string) => void) => Promise<void>;
+};
+
+export async function createPgDriver(url: string, hooks: { onRemoteChange: () => void }): Promise<Driver & PgExtras> {
   const { Pool, Client } = loadPg();
   const pool = new Pool({ connectionString: url, max: 5 });
   pool.on("error", (err) => console.error("[luma pg] pool error:", err.message));
@@ -77,6 +86,7 @@ export async function createPgDriver(url: string, hooks: { onRemoteChange: () =>
   let version = 0;
   let snap: Snap = new Map();
   const liveHandlers: ((p: string) => void)[] = [];
+  const channelHandlers = new Map<string, ((p: string) => void)[]>();
 
   // Listener connection for cross-process notifications.
   const listener = new Client({ connectionString: url });
@@ -88,6 +98,8 @@ export async function createPgDriver(url: string, hooks: { onRemoteChange: () =>
       if (origin !== ORIGIN && v > version) hooks.onRemoteChange();
     } else if (msg.channel === "luma_live") {
       for (const fn of liveHandlers) fn(msg.payload);
+    } else {
+      for (const fn of channelHandlers.get(msg.channel) ?? []) fn(msg.payload);
     }
   });
   await listener.query("listen luma_changed");
@@ -237,6 +249,14 @@ export async function createPgDriver(url: string, hooks: { onRemoteChange: () =>
     },
     onLive(fn) {
       liveHandlers.push(fn);
+    },
+    query: (text, params) => pool.query(text, params),
+    async listen(channel, fn) {
+      if (!/^[a-z_]+$/.test(channel)) throw new Error("bad channel");
+      const list = channelHandlers.get(channel) ?? [];
+      list.push(fn);
+      channelHandlers.set(channel, list);
+      if (list.length === 1) await listener.query(`listen ${channel}`);
     },
   };
 }

@@ -37,6 +37,9 @@ export const EMPTY: DB = {
   users: [],
   sessions: [],
   invites: [],
+  notifications: [],
+  resets: [],
+  reviewThreads: [],
 };
 
 export interface Driver {

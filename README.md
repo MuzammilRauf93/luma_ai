@@ -1,8 +1,8 @@
-# Luma AI — Phase 5
+# Luma AI — Phase 6
 
 An agent-driven workspace: describe what you want, and a team of Claude-powered agents plans it, builds it, and reports back through a ticket board, with a built-in code editor and live preview.
 
-This is **Phase 3** of `Luma_AI_Product_Plan.md` (§10): the Phase 1 MVP, Phase 2 multi-agent autopilot, Phase 3 shared memory, diffs, templates gallery and onboarding, Phase 4 sandboxed commands, GitHub sync and one-click deploy, and Phase 5 smarter memory, workspace secrets, Postgres + background workers, and multi-user sharing.
+This is **Phase 3** of `Luma_AI_Product_Plan.md` (§10): the Phase 1 MVP, Phase 2 multi-agent autopilot, Phase 3 shared memory, diffs, templates gallery and onboarding, Phase 4 sandboxed commands, GitHub sync and one-click deploy, Phase 5 smarter memory, workspace secrets, Postgres + background workers and multi-user sharing, and Phase 6 notifications, insights, email and cloud-ready file storage.
 
 ## Quick start
 
@@ -54,6 +54,10 @@ Then create a workspace, type a goal, and watch the team work.
 | Workspace secrets (encrypted env vars, redacted from agents) | ✅ Phase 5 |
 | Postgres storage, durable runs that resume after restarts, background workers | ✅ Phase 5 |
 | Multi-user: sign-in, invites, workspace roles, per-user activity | ✅ Phase 5 |
+| Notifications: inbox + bell, @mentions, desktop alerts | ✅ Phase 6 |
+| Insights dashboard (runs, reliability, speed, tokens, per agent) | ✅ Phase 6 |
+| Email (SMTP): invites, password reset, instant + daily digest notifications | ✅ Phase 6 |
+| Cloud-ready file storage: workspace files + history in Postgres, synced to each host | ✅ Phase 6 |
 
 ## Mobile apps in the iOS Simulator (Mac only)
 
@@ -84,6 +88,29 @@ UI ◄── SSE /api/workspaces/:id/stream ◄─ bus.publish(live events)
 * `src/lib/engine/tools.ts`: `list_files`, `read_file`, `write_file`, `delete_file`, `create_ticket`, `add_comment`, `ask_user`, `finish_ticket`, each gated by the agent's permissions.
 * `src/lib/engine/scheduler.ts`: autopilot. `kick(workspaceId)` starts queued tickets whose dependencies are Done/In Review, up to `maxParallelRuns`, one ticket per agent, with an hourly circuit breaker.
 * `src/lib/presets.ts`: the nine agents' role prompts, the default team per template, plus the shared team rules.
+
+### Phase 8: VS Code-style IDE + code review
+- **Code** page is now a VS Code-style workbench: menu bar, command center, activity bar, Explorer (with Open Editors and Timeline), Search (find/replace across files, regex/case/word, include/exclude), Source Control (stage, unstage, discard, commit, push/pull, graph), tabs with preview mode, split editors, breadcrumbs, Problems/Output/Terminal/Comments panel and a status bar.
+- **Same keyboard shortcuts as VS Code** (Ctrl/Cmd+P, Ctrl/Cmd+Shift+P, Ctrl/Cmd+B, Ctrl/Cmd+J, Ctrl+`, Ctrl/Cmd+K Ctrl/Cmd+T…). Close Editor is Alt+W because browsers reserve Ctrl+W.
+- **Settings use VS Code's names** (`editor.fontSize`, `files.autoSave`, `workbench.colorTheme`…): Settings UI, `settings.json`, import your VS Code settings.json, Keyboard Shortcuts list, themes Dark/Light Modern, Dark+/Light+, High Contrast.
+- **Code Review**: every agent ticket is a change set. Side-by-side diffs, revert single changes, Viewed checkboxes, Reject a file, line comments (click + in the gutter), Approve (ticket → Done) or Request Changes (comments are sent to the agent, which starts again), and AI review on demand that posts line comments.
+- Unsaved edits survive leaving the page (kept in the browser). Simple mode still shows only the live result.
+
+### Phase 7: everything in one box
+- **Landing page** at `/welcome`; signed-out visitors land there, deep links go to sign-in and come back (open-redirect safe).
+- **Settings hub** with tabs: Claude & models, Profile, Team, Integrations, Email, Usage & limits, System.
+- **GitHub without a terminal**: paste a personal access token in Settings → Integrations; Luma creates repos, pushes, opens PRs and enables Pages through the GitHub API (the `gh` CLI is now optional).
+- **Claude subscription token** can be pasted during setup and is stored encrypted, so agents don't depend on a terminal login.
+- **System tab** (admins): server diagnostics, one-click install of optional components (pg, nodemailer, transformers), tool checks, server configuration written to `.env.local`, database connection test, pin the encryption secret, and restart Luma from the browser.
+- **Security**: the live preview runs in a sandboxed origin (CSP `sandbox`) with a signed, workspace-scoped token, so agent-written pages can't call Luma's API as you; tickets can only reference agents and tickets from their own workspace.
+- **Polish**: in-app dialogs and toasts instead of browser pop-ups, 404 page, favicon, page titles, keyboard focus rings.
+
+### Phase 6: notifications, insights, email, cloud files
+
+* **Notifications** (`src/lib/notifications.ts`, bell in the sidebar). Per-person inbox: an agent needs your answer, a handoff to approve, ready for review, a run failed, @mentions in comments (`@Ana`), proposed team memories, deploys, autopilot paused. Owners/editors are notified (viewers only for mentions), never the person who caused it; repeats within 30 min are merged. Click opens the ticket (`/w/<id>/board?ticket=<id>`). Optional desktop alerts. In single-user mode everything goes to you.
+* **Insights** (`src/lib/metrics.ts`, `/w/<id>/insights`): runs, completion rate, tickets done and median time to Done / first review, typical run length, tokens and cost, checks passed, handoffs/questions, daily runs + tokens charts (with a table view), and a per-agent table. 7 / 30 / 90 days.
+* **Email** (`src/lib/mail.ts`, Settings → Email, optional `nodemailer`): any SMTP provider (presets for Google Workspace, Microsoft 365, SendGrid, Postmark) or `LUMA_SMTP_URL` + `LUMA_MAIL_FROM` + `LUMA_APP_URL`. Sends invite emails, password reset links (`/forgot` → `/reset/<token>`, one hour, one use, signs out other sessions), and notifications: important ones right away (questions, approvals, failures, mentions) or a daily digest, per person (Settings → Profile). Admins can also create a reset link for anyone (Team table, key icon) when email isn't set up.
+* **Cloud-ready files** (`src/lib/fileMirror.ts`): with Postgres, workspace files and checkpoint blobs are stored in `luma_files` / `luma_blobs`; each process keeps a local working copy, pushes every change with a version number and pulls newer versions before reading (every 2 s, or immediately after a NOTIFY from another host). Fresh hosts download on first use; existing disk-only workspaces are uploaded once at start-up. Commands and git pulls sync what they change. A missing `.git` is rebuilt from the GitHub remote. `LUMA_FILES=disk` turns it off. **Every process must share the same `LUMA_SECRET`** (it encrypts API keys, tokens, secrets and the SMTP password). This lets the UI run on a host without a persistent disk (e.g. `LUMA_DATA_DIR=/tmp/luma`) while workers run agents elsewhere.
 
 ### Phase 5: memory, secrets, Postgres + workers, multi-user
 

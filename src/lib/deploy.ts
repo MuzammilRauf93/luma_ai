@@ -10,6 +10,7 @@ import { runProcess, toolPath } from "./proc";
 import { zip } from "./zip";
 import { updateWorkspace } from "./repo";
 import { redact, secretEnv } from "./secrets";
+import { runDetached } from "./auth";
 import type { Deploy, DeployProvider, Workspace } from "./types";
 
 /**
@@ -186,7 +187,8 @@ async function deployVercel(ws: Workspace, files: SiteFile[], log: (s: string) =
 async function deployPages(ws: Workspace, files: SiteFile[], log: (s: string) => void) {
   const repo = ws.git?.githubRepo;
   if (!ws.git?.enabled || !ws.git.remoteUrl || !repo) throw new Error("GitHub Pages needs a GitHub repository: connect one in the GitHub section first.");
-  const env = { ...process.env, PATH: toolPath(), GIT_TERMINAL_PROMPT: "0" } as NodeJS.ProcessEnv;
+  const { gh: ghApi, githubToken, gitAuthEnv } = await import("./github");
+  const env = { ...process.env, PATH: toolPath(), GIT_TERMINAL_PROMPT: "0", ...(await gitAuthEnv()) } as NodeJS.ProcessEnv;
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "luma-pages-"));
   try {
     for (const f of files) {
@@ -211,11 +213,18 @@ async function deployPages(ws: Workspace, files: SiteFile[], log: (s: string) =>
     await fs.rm(tmp, { recursive: true, force: true });
   }
   log("Turning on GitHub Pages…");
-  const gh = (args: string[]) => runProcess("gh", args, { env, timeoutMs: 30_000 });
-  await gh(["api", "-X", "POST", `repos/${repo}/pages`, "-f", "source[branch]=gh-pages", "-f", "source[path]=/"]); // 409 if already on
-  const info = await gh(["api", `repos/${repo}/pages`, "--jq", ".html_url"]);
   const [owner, name] = repo.split("/");
-  const url = info.code === 0 && info.stdout.trim().startsWith("http") ? info.stdout.trim() : `https://${owner}.github.io/${name}/`;
+  let url = `https://${owner}.github.io/${name}/`;
+  if (await githubToken()) {
+    await ghApi(`/repos/${repo}/pages`, { method: "POST", json: { source: { branch: "gh-pages", path: "/" } } }); // 409 if already on
+    const info = await ghApi<{ html_url?: string }>(`/repos/${repo}/pages`);
+    if (info.data.html_url) url = info.data.html_url;
+  } else {
+    const gh = (args: string[]) => runProcess("gh", args, { env, timeoutMs: 30_000 });
+    await gh(["api", "-X", "POST", `repos/${repo}/pages`, "-f", "source[branch]=gh-pages", "-f", "source[path]=/"]);
+    const info = await gh(["api", `repos/${repo}/pages`, "--jq", ".html_url"]);
+    if (info.code === 0 && info.stdout.trim().startsWith("http")) url = info.stdout.trim();
+  }
   return { url, siteId: repo, siteName: repo, note: "GitHub Pages can take a minute or two to show the new version." };
 }
 
@@ -260,7 +269,7 @@ export async function startDeploy(ws: Workspace, provider: DeployProvider) {
     d.warnings.push(`…${s}`);
     void saveDeploy({ ...d });
   };
-  void (async () => {
+  void runDetached(async () => {
     try {
       const files = await collect(ws, log);
       if (!files.length) throw new Error("There are no files to deploy yet.");
@@ -293,7 +302,17 @@ export async function startDeploy(ws: Workspace, provider: DeployProvider) {
       d.finishedAt = now();
       running.delete(ws.id);
       await saveDeploy({ ...d });
+      if (provider !== "zip") {
+        const { notify } = await import("./notifications");
+        await notify({
+          workspaceId: ws.id,
+          kind: "deploy",
+          title: d.status === "ready" ? `${ws.name} is live` : `Deploy of ${ws.name} failed`,
+          body: d.status === "ready" ? `${d.url ?? ""}${d.warnings.length ? ` · ${d.warnings.length} warning(s)` : ""}` : d.error ?? "",
+          link: `/w/${ws.id}/ship`,
+        }).catch(() => undefined);
+      }
     }
-  })();
+  });
   return d;
 }

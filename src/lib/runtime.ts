@@ -110,10 +110,16 @@ export async function boot() {
     const d = (await getDriver()) as unknown as { notifyLive: (p: string) => Promise<void>; onLive: (fn: (p: string) => void) => void };
     setLiveBridge((p) => void d.notifyLive(p).catch(() => undefined));
     d.onLive(receiveLive);
+    if (!process.env.LUMA_SECRET)
+      console.warn("[luma] Using Postgres without LUMA_SECRET: keys saved by one process can't be read by another. Set the same LUMA_SECRET everywhere.");
   } else if (ROLE !== "all") {
     console.warn(`[luma] LUMA_ROLE=${ROLE} needs Postgres (LUMA_DATABASE_URL). Running as a single process instead.`);
   }
-  console.log(`[luma] ${ROLE} process ${WORKER_ID} · store: ${driverName}${isExecutor() ? " · runs agents" : " · UI only"}`);
+  const { mirrorEnabled, seed } = await import("./fileMirror");
+  if (mirrorEnabled()) {
+    await seed((await read()).workspaces.map((w) => w.id)).catch((err) => console.error("[luma files] seeding failed:", err));
+  }
+  console.log(`[luma] ${ROLE} process ${WORKER_ID} · store: ${driverName} · files: ${mirrorEnabled() ? "postgres + local cache" : "disk"}${isExecutor() ? " · runs agents" : " · UI only"}`);
   if (!isExecutor()) return;
 
   // React quickly when the web process queues work (instead of waiting for the next loop).
@@ -135,6 +141,11 @@ export async function boot() {
       if (tickNo % 3 === 0) {
         await recover();
         await kickAll();
+      }
+      if (tickNo % 720 === 1) {
+        // Hourly: daily notification digests (only does anything once per person per day).
+        const { sendDigests } = await import("./mail");
+        await sendDigests();
       }
     } catch (err) {
       console.error("[luma] background loop:", err);

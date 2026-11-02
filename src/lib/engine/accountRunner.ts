@@ -82,7 +82,7 @@ export async function executeWithAccount(input: RunInput): Promise<RunResult> {
       maxTurns: MAX_TURNS,
       abortController: controller,
       cwd: await sdkCwd(),
-      env: accountEnv(),
+      env: await accountEnv(),
     },
   });
 

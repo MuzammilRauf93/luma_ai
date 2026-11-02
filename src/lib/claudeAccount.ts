@@ -12,13 +12,24 @@ import type { ModelOption } from "./anthropic";
  * Claude Code on this computer, so usage counts against the subscription.
  */
 
-/** Environment for the SDK subprocess: never let an API key override the Claude login. */
-export function accountEnv(): Record<string, string> {
+/**
+ * Environment for the SDK subprocess: never let an API key override the Claude login.
+ * If a subscription token was saved in Settings, it's used instead of this computer's login
+ * (that's what makes "Claude account" mode work on servers).
+ */
+export async function accountEnv(): Promise<Record<string, string>> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
   delete env.ANTHROPIC_API_KEY;
   delete env.ANTHROPIC_AUTH_TOKEN;
   env.CLAUDE_AGENT_SDK_CLIENT_APP = "luma-ai/0.1.0";
+  const { read } = await import("./store");
+  const enc = (await read()).settings.claudeOauthToken;
+  if (enc) {
+    const { decrypt } = await import("./crypto");
+    env.CLAUDE_CODE_OAUTH_TOKEN = await decrypt(enc).catch(() => "");
+    if (!env.CLAUDE_CODE_OAUTH_TOKEN) delete env.CLAUDE_CODE_OAUTH_TOKEN;
+  }
   return env;
 }
 
@@ -30,7 +41,7 @@ export async function sdkCwd() {
 }
 
 export const LOGIN_HELP =
-  "Luma couldn't find a Claude login on this computer. In Terminal, run `npx @anthropic-ai/claude-code` (or `claude` if it's installed), type /login, choose your Claude account, then come back and try again.";
+  "Luma couldn't find a Claude login. Paste a Claude subscription token in Settings → Claude (or sign in once with Claude Code on this computer), then try again.";
 
 /** Ask the SDK which account it is signed in with, without sending any prompt. */
 export async function inspectAccount(): Promise<{ account: ClaudeAccount; models: ModelOption[] }> {
@@ -48,7 +59,7 @@ export async function inspectAccount(): Promise<{ account: ClaudeAccount; models
       persistSession: false,
       abortController: ctrl,
       cwd: await sdkCwd(),
-      env: accountEnv(),
+      env: await accountEnv(),
     },
   });
   const timeout = setTimeout(() => ctrl.abort(), 30_000);
@@ -60,7 +71,7 @@ export async function inspectAccount(): Promise<{ account: ClaudeAccount; models
     if (!info.email && !info.subscriptionType && !info.tokenSource) throw new Error(LOGIN_HELP);
     if (info.apiKeySource || !info.subscriptionType || /api/i.test(info.subscriptionType)) {
       throw new Error(
-        "Claude Code on this computer is signed in with an API (Console) account, not a Claude plan. In Terminal run `npx @anthropic-ai/claude-code`, type /login, pick “Claude account”, then try again.",
+        "This login is an API (Console) account, not a Claude plan. Paste a Claude subscription token instead (created with `claude setup-token`), or use the API key option.",
       );
     }
     const models = (await q.supportedModels()).map((m) => ({ id: m.value, name: m.displayName }));

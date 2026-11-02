@@ -10,6 +10,7 @@ import { buildSystemPrompt } from "../presets";
 import { memoryBriefing } from "../memory";
 import { autoCommitRun } from "../git";
 import { secretNames } from "../secrets";
+import { runDetached } from "../auth";
 import { newRunState, QUIET_TOOLS, toApiTool, toolsFor, WEB_SEARCH_TOOL, type ToolContext } from "./tools";
 import { executeWithAccount } from "./accountRunner";
 import { onAgentFinished } from "../simulator";
@@ -152,7 +153,8 @@ export async function startRun(ticketId: string, opts: { auto?: boolean } = {}):
     startedAt: new Date().toISOString(),
   };
   let outcome: RunRecord["status"] = "finished";
-  void (useAccount ? executeWithAccount(input) : execute(input))
+  // Detach from the HTTP request: the agent works on its own, not as the person who clicked Run.
+  void runDetached(() => (useAccount ? executeWithAccount(input) : execute(input)))
     .then((result) => finishRun(input, result))
     .then(() => onAgentFinished(workspace.id, ticketId).catch(() => undefined))
     .catch(async (err: unknown) => {

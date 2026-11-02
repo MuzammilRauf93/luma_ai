@@ -8,6 +8,7 @@ import {
   Brain,
   Bot,
   Rocket,
+  BarChart3,
   Code2,
   Home,
   KanbanSquare,
@@ -23,6 +24,8 @@ import {
 import { api } from "@/lib/client";
 import type { Workspace } from "@/lib/types";
 import { NewWorkspaceModal } from "./NewWorkspaceModal";
+import { NotificationBell } from "./NotificationBell";
+import { DialogHost } from "./Dialogs";
 
 type WsItem = Workspace & { ticketCounts: { open: number; done: number; waiting: number }; pendingMemories?: number };
 
@@ -37,7 +40,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [creating, setCreating] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const bare = pathname.startsWith("/setup") || pathname.startsWith("/login") || pathname.startsWith("/invite");
+  const bare = pathname.startsWith("/setup") || pathname.startsWith("/login") || pathname.startsWith("/invite") || pathname.startsWith("/forgot") || pathname.startsWith("/reset") || pathname.startsWith("/welcome");
   const [me, setMe] = useState<{ authEnabled: boolean; user: { name: string; email: string; role: string } | null } | null>(null);
   const wsMatch = pathname.match(/^\/w\/([^/]+)/);
   const currentWsId = wsMatch?.[1];
@@ -53,6 +56,24 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(WORKSPACES_CHANGED, loadWorkspaces);
   }, [loadWorkspaces]);
 
+  // Tab titles: "<Page> · <Workspace> · Luma AI".
+  const wsName = workspaces.find((w) => w.id === currentWsId)?.name;
+  useEffect(() => {
+    if (pathname.startsWith("/welcome")) return;
+    const seg = currentWsId ? pathname.split("/")[3] ?? "" : pathname.split("/")[1] ?? "";
+    const names: Record<string, string> = {
+      "": currentWsId ? "Overview" : "Workspaces", board: "Board", editor: "Editor", agents: "Agents", memory: "Memory", ship: "Ship", insights: "Insights",
+      chat: "Chat", files: "Files", settings: "Settings", login: "Sign in", setup: "Set up", forgot: "Reset password", reset: "Reset password", invite: "Join workspace",
+      library: "Agent library", notifications: "Notifications", activity: "Activity",
+    };
+    const page = names[seg] ?? seg.charAt(0).toUpperCase() + seg.slice(1);
+    const title = [page, currentWsId ? wsName : null, "Luma AI"].filter(Boolean).join(" · ");
+    document.title = title;
+    // Next applies the layout's metadata title after navigation; set ours again once it has.
+    const t = setTimeout(() => (document.title = title), 150);
+    return () => clearTimeout(t);
+  }, [pathname, currentWsId, wsName]);
+
   // Sign-in (Phase 5): send signed-out people to /login once accounts exist.
   useEffect(() => {
     if (bare) return;
@@ -62,14 +83,16 @@ export function AppShell({ children }: { children: ReactNode }) {
           if (m.user && prev?.user?.email !== m.user.email) loadWorkspaces(); // just signed in
           return m;
         });
-        if (m.authEnabled && !m.user) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+        // Signed out: the landing page for the home page, sign-in (then back here) for deep links.
+        if (m.authEnabled && !m.user) router.replace(pathname === "/" ? "/welcome" : `/login?next=${encodeURIComponent(pathname)}`);
       })
       .catch(() => setMe({ authEnabled: false, user: null }));
   }, [pathname, router, bare, loadWorkspaces]);
 
   const signOut = async () => {
     await api("/api/auth/logout", { method: "POST" }).catch(() => undefined);
-    router.replace("/login");
+    setMe(null);
+    router.replace("/welcome");
   };
 
   useEffect(() => {
@@ -93,7 +116,21 @@ export function AppShell({ children }: { children: ReactNode }) {
     } catch {}
   };
 
-  if (bare) return <>{children}</>;
+  if (bare)
+    return (
+      <>
+        {children}
+        <DialogHost />
+      </>
+    );
+
+  // Until we know who's here, don't render workspace screens (avoids flashes and 401s).
+  if (!me || (me.authEnabled && !me.user))
+    return (
+      <div className="h-screen grid place-items-center">
+        <span className="w-9 h-9 rounded-xl grid place-items-center text-white font-bold animate-pulse" style={{ background: "linear-gradient(135deg,#7c3aed,#db2777)" }}>L</span>
+      </div>
+    );
 
   const current = workspaces.find((w) => w.id === currentWsId);
   const wsNav = currentWsId
@@ -103,18 +140,22 @@ export function AppShell({ children }: { children: ReactNode }) {
         { href: `/w/${currentWsId}/agents`, label: "Agents", icon: Bot },
         { href: `/w/${currentWsId}/memory`, label: "Memory", icon: Brain },
         { href: `/w/${currentWsId}/ship`, label: "Ship", icon: Rocket },
-        { href: `/w/${currentWsId}/editor`, label: "Code & Preview", icon: Code2 },
+        { href: `/w/${currentWsId}/insights`, label: "Insights", icon: BarChart3 },
+        { href: `/w/${currentWsId}/editor`, label: "Code", icon: Code2 },
       ]
     : [];
 
   const sidebar = (
     <aside className="w-[244px] shrink-0 h-full flex flex-col bg-panel border-r">
-      <Link href="/" className="flex items-center gap-2.5 px-4 h-14 border-b">
-        <span className="w-7 h-7 rounded-lg grid place-items-center text-white text-sm font-bold" style={{ background: "linear-gradient(135deg,#7c3aed,#db2777)" }}>
-          L
-        </span>
-        <span className="font-semibold tracking-tight">Luma AI</span>
-      </Link>
+      <div className="flex items-center h-14 border-b pr-2">
+        <Link href="/" className="flex items-center gap-2.5 px-4 flex-1 h-full">
+          <span className="w-7 h-7 rounded-lg grid place-items-center text-white text-sm font-bold" style={{ background: "linear-gradient(135deg,#7c3aed,#db2777)" }}>
+            L
+          </span>
+          <span className="font-semibold tracking-tight">Luma AI</span>
+        </Link>
+        <NotificationBell />
+      </div>
 
       <nav className="flex-1 overflow-y-auto scroll-thin px-2 py-3 space-y-5">
         <div>
@@ -217,6 +258,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
         <main className="flex-1 min-h-0 overflow-auto scroll-thin">{children}</main>
       </div>
+      <DialogHost />
       <NewWorkspaceModal
         open={creating}
         onClose={() => setCreating(false)}

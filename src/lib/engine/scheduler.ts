@@ -74,10 +74,10 @@ async function tick(workspaceId: string) {
     const hourAgo = Date.now() - 3_600_000;
     const recent = (st.autoStarts.get(workspaceId) ?? []).filter((ts) => ts > hourAgo);
     if (recent.length >= MAX_AUTO_STARTS_PER_HOUR) {
-      await updateWorkspace(workspaceId, {
-        autopilotPaused: true,
-        autopilotNote: `Autopilot paused itself after ${recent.length} automatic runs in one hour, to protect your usage. Check the board, then resume when you're ready.`,
-      });
+      const note = `Autopilot paused itself after ${recent.length} automatic runs in one hour, to protect your usage. Check the board, then resume when you're ready.`;
+      await updateWorkspace(workspaceId, { autopilotPaused: true, autopilotNote: note });
+      const { notify } = await import("../notifications");
+      await notify({ workspaceId, kind: "autopilot", title: `Autopilot paused in ${ws.name}`, body: note, link: `/w/${workspaceId}/board` }).catch(() => undefined);
       return;
     }
 

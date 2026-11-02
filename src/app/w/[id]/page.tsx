@@ -1,5 +1,6 @@
 "use client";
 
+import { confirmDialog, promptDialog, toast } from "@/components/Dialogs";
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -262,7 +263,7 @@ function WorkspaceSettings({ open, onClose, workspace }: { open: boolean; onClos
     }
   };
   const remove = async () => {
-    if (!confirm(`Delete “${workspace.name}” with all its tickets and files? This can't be undone.`)) return;
+    if (!(await confirmDialog({ title: `Delete “${workspace.name}”?`, body: "All its tickets, files, history and memory are deleted. This can't be undone.", confirmLabel: "Delete workspace", danger: true }))) return;
     await api(`/api/workspaces/${workspace.id}`, { method: "DELETE" });
     window.dispatchEvent(new Event("luma:workspaces"));
     router.push("/");

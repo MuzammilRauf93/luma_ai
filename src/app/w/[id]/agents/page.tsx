@@ -1,5 +1,6 @@
 "use client";
 
+import { confirmDialog, promptDialog, toast } from "@/components/Dialogs";
 import { useCallback, useEffect, useState } from "react";
 import clsx from "clsx";
 import { BookmarkPlus, Copy, Library, Pause, Pencil, Play, Plus, Sparkles, Trash2, Wand2 } from "lucide-react";
@@ -56,12 +57,12 @@ export default function AgentsPage() {
     setFlash(`${a.name} saved to your library. Add them to any workspace from “Agent library”.`);
   };
   const remove = async (a: Agent) => {
-    if (!confirm(`Remove ${a.name} from this workspace? Their tickets become unassigned.${a.isPredefined ? " You can add them back from the agent library." : ""}`)) return;
+    if (!(await confirmDialog({ title: `Remove ${a.name} from this workspace?`, body: `Their tickets become unassigned.${a.isPredefined ? " You can add them back from the agent library." : ""}`, confirmLabel: "Remove", danger: true }))) return;
     try {
       await api(`/api/agents/${a.id}`, { method: "DELETE" });
       reload();
     } catch (e) {
-      alert((e as Error).message);
+      toast((e as Error).message, "error");
     }
   };
 
@@ -409,7 +410,7 @@ function LibraryModal({ onClose }: { onClose: () => void }) {
   };
 
   const removeFromLibrary = async (l: LibraryAgent) => {
-    if (!confirm(`Delete ${l.name} from your library? Agents already added to workspaces stay.`)) return;
+    if (!(await confirmDialog({ title: `Delete ${l.name} from your library?`, body: "Agents already added to workspaces stay.", confirmLabel: "Delete", danger: true }))) return;
     await api(`/api/library/${l.id}`, { method: "DELETE" });
     load();
   };

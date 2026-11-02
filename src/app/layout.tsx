@@ -3,7 +3,7 @@ import "./globals.css";
 import { AppShell } from "@/components/AppShell";
 
 export const metadata: Metadata = {
-  title: "Luma AI",
+  title: { default: "Luma AI", template: "%s · Luma AI" },
   description: "An agent-driven workspace where a team of AI agents builds your projects.",
 };
 

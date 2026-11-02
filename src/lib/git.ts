@@ -2,6 +2,7 @@ import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
 import { DATA_DIR, read } from "./store";
+import { gh, githubConnected, gitAuthEnv } from "./github";
 import { publish } from "./bus";
 import { workspaceRoot } from "./files";
 import { runProcess, toolPath } from "./proc";
@@ -39,7 +40,9 @@ function env() {
 }
 
 async function sh(cwd: string, cmd: string, args: string[], timeoutMs = 60_000) {
-  const r = await runProcess(cmd, args, { cwd, env: env(), timeoutMs });
+  // A GitHub token saved in Settings authenticates HTTPS git without any terminal setup.
+  const auth = cmd === "git" ? await gitAuthEnv() : {};
+  const r = await runProcess(cmd, args, { cwd, env: { ...env(), ...auth } as NodeJS.ProcessEnv, timeoutMs });
   return { ...r, out: r.stdout.trim(), err: (r.stderr || r.stdout).trim() };
 }
 
@@ -80,6 +83,8 @@ export async function tools() {
     git: g.code === 0,
     gh: gh.code !== 127 && !/ENOENT/.test(ghText),
     ghAuthed: gh.code === 0,
+    /** GitHub account connected in Settings → Integrations (preferred over the gh CLI). */
+    token: await githubConnected(),
     ghUser: ghText.match(/account\s+(\S+)/i)?.[1] ?? ghText.match(/as\s+(\S+)/i)?.[1],
   };
 }
@@ -91,6 +96,39 @@ async function isRepo(wsId: string) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Phase 6: on a fresh host (files restored from Postgres, no .git folder) rebuild the repo:
+ * fetch history from the remote and point the branch at it, keeping the working files.
+ */
+async function ensureRepo(ws: Workspace) {
+  if (await isRepo(ws.id)) return true;
+  const s = settingsOf(ws);
+  if (!s.enabled) return false;
+  await must(ws.id, ["init", "-q"], "git init");
+  await must(ws.id, ["symbolic-ref", "HEAD", `refs/heads/${s.branch}`], "Setting the branch");
+  if (!(await git(ws.id, ["config", "user.email"])).out) {
+    await git(ws.id, ["config", "user.email", "luma@localhost"]);
+    await git(ws.id, ["config", "user.name", "Luma"]);
+  }
+  if (s.remoteUrl) {
+    await git(ws.id, ["remote", "add", "origin", s.remoteUrl]);
+    const f = await git(ws.id, ["fetch", "-q", "origin"], 120_000);
+    if (f.code === 0) {
+      for (const b of [s.branch, s.baseBranch]) {
+        if ((await git(ws.id, ["rev-parse", "--verify", "--quiet", `origin/${b}`])).code === 0) {
+          await must(ws.id, ["reset", "-q", "--mixed", `origin/${b}`], "Restoring history");
+          if (b !== s.branch) await git(ws.id, ["checkout", "-q", "-B", s.branch]);
+          return true;
+        }
+      }
+    }
+  }
+  // No remote history reachable: start a new history from the current files.
+  await must(ws.id, ["add", "-A"], "git add");
+  await must(ws.id, ["commit", "-q", "--allow-empty", "-m", "Restore workspace from Luma storage"], "git commit");
+  return true;
 }
 
 async function ensureBranch(wsId: string, branch: string) {
@@ -120,6 +158,7 @@ export async function enableGit(ws: Workspace, opts: { branch?: string; baseBran
   } catch {
     await fs.writeFile(gi, GITIGNORE);
   }
+  await (await import("./files")).syncChanged(ws.id, [".gitignore"]);
   // Use your global git identity if you have one; otherwise a local placeholder.
   if (!(await git(ws.id, ["config", "user.email"])).out) {
     await must(ws.id, ["config", "user.email", "luma@localhost"], "git config");
@@ -146,8 +185,8 @@ export async function updateGitSettings(ws: Workspace, patch: Partial<Pick<GitSe
 /** Commit everything that changed. Returns the short sha, or null when there was nothing to commit. */
 export async function commitAll(ws: Workspace, message: string, author?: { name: string; email?: string }, paths?: string[]) {
   const s = settingsOf(ws);
-  if (!s.enabled || !(await isRepo(ws.id))) return null;
   if (paths && !paths.length) return null;
+  if (!s.enabled || !(await ensureRepo(ws))) return null;
   await ensureBranch(ws.id, s.branch);
   // With parallel runs, only commit the files this run touched (others commit their own).
   await must(ws.id, paths ? ["add", "-A", "--", ...paths] : ["add", "-A"], "git add");
@@ -168,11 +207,22 @@ export async function connectRemote(ws: Workspace, input: { repo?: string; creat
     const name = input.create.name.trim();
     if (!/^[\w.-]+(\/[\w.-]+)?$/.test(name)) throw new Error("Use a repository name like my-site or my-org/my-site.");
     const t = await tools();
-    if (!t.gh) throw new Error("Creating a repo needs the GitHub CLI. Install it (brew install gh), run `gh auth login`, then try again.");
-    if (!t.ghAuthed) throw new Error("The GitHub CLI isn't signed in. Run `gh auth login` in Terminal, then try again.");
     await git(ws.id, ["remote", "remove", "origin"]);
-    const r = await sh(root, "gh", ["repo", "create", name, input.create.private ? "--private" : "--public", "--source", ".", "--remote", "origin", "--description", ws.description || `${ws.name}, built with Luma AI`], 90_000);
-    if (r.code !== 0) throw new Error(`Creating the GitHub repo failed: ${r.err.split("\n").slice(-4).join(" ")}`);
+    if (t.token) {
+      const [owner, repoName] = name.includes("/") ? name.split("/") : [null, name];
+      const me = (await read()).settings.githubUser;
+      const path = owner && owner !== me ? `/orgs/${owner}/repos` : "/user/repos";
+      const r = await gh<{ clone_url?: string; message?: string; errors?: { message?: string }[] }>(path, {
+        method: "POST",
+        json: { name: repoName, private: input.create.private, description: ws.description || `${ws.name}, built with Luma AI`, auto_init: false },
+      });
+      if (!r.data.clone_url) throw new Error(`Creating the GitHub repo failed: ${r.data.errors?.[0]?.message ?? r.data.message ?? r.status}`);
+      await must(ws.id, ["remote", "add", "origin", r.data.clone_url], "Adding the remote");
+    } else {
+      if (!t.gh || !t.ghAuthed) throw new Error("Connect GitHub in Settings → Integrations to create repositories from Luma.");
+      const r = await sh(root, "gh", ["repo", "create", name, input.create.private ? "--private" : "--public", "--source", ".", "--remote", "origin", "--description", ws.description || `${ws.name}, built with Luma AI`], 90_000);
+      if (r.code !== 0) throw new Error(`Creating the GitHub repo failed: ${r.err.split("\n").slice(-4).join(" ")}`);
+    }
   } else {
     let url = input.repo?.trim() ?? "";
     if (/^[\w.-]+\/[\w.-]+$/.test(url)) url = `https://github.com/${url}.git`;
@@ -198,7 +248,7 @@ export async function push(ws: Workspace, opts: { includeBase?: boolean } = {}) 
       const hint = /rejected|non-fast-forward|fetch first/i.test(r.err)
         ? " GitHub has changes Luma doesn't have yet: use “Pull” first."
         : /auth|permission|403|could not read Username/i.test(r.err)
-          ? " Git couldn't sign in to GitHub. Run `gh auth login` (and `gh auth setup-git`) in Terminal."
+          ? " Git couldn't sign in to GitHub. Connect GitHub in Settings → Integrations (a token with access to this repository)."
           : "";
       await save(ws.id, { lastError: `Push failed.${hint}` });
       throw new Error(`Push failed: ${r.err.split("\n").slice(-3).join(" ")}${hint}`);
@@ -230,9 +280,27 @@ export async function openPullRequest(ws: Workspace) {
   if (s.branch === s.baseBranch) throw new Error(`Luma commits straight to ${s.baseBranch}. Set a work branch (e.g. luma/agents) to use pull requests.`);
   if (!s.githubRepo) throw new Error("Pull requests need a GitHub repository.");
   const t = await tools();
-  if (!t.gh || !t.ghAuthed) throw new Error("Pull requests use the GitHub CLI. Install it (brew install gh) and run `gh auth login`.");
+  if (!t.token && (!t.gh || !t.ghAuthed)) throw new Error("Connect GitHub in Settings → Integrations to open pull requests.");
   await push(ws, { includeBase: true });
   const root = workspaceRoot(ws.id);
+  if (t.token) {
+    const owner = s.githubRepo.split("/")[0];
+    const open = await gh<{ html_url: string }[]>(`/repos/${s.githubRepo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${s.branch}`)}`);
+    if (Array.isArray(open.data) && open.data[0]) return { url: open.data[0].html_url, created: false };
+    const commits = await git(ws.id, ["log", `${s.baseBranch}..${s.branch}`, "--pretty=format:- %s (%an)"]);
+    const n = commits.out ? commits.out.split("\n").length : 0;
+    const r = await gh<{ html_url?: string; message?: string; errors?: { message?: string }[] }>(`/repos/${s.githubRepo}/pulls`, {
+      method: "POST",
+      json: {
+        title: `Luma: ${n} update${n === 1 ? "" : "s"} from your agents`,
+        head: s.branch,
+        base: s.baseBranch,
+        body: `Work from your Luma AI agents on **${ws.name}**.\n\n${commits.out || "(no commits yet)"}\n\n_Opened by Luma AI._`,
+      },
+    });
+    if (!r.data.html_url) throw new Error(`Opening the pull request failed: ${r.data.errors?.[0]?.message ?? r.data.message ?? r.status}`);
+    return { url: r.data.html_url, created: true };
+  }
   const existing = await sh(root, "gh", ["pr", "view", s.branch, "--repo", s.githubRepo, "--json", "url,state", "--jq", "select(.state==\"OPEN\") | .url"]);
   if (existing.code === 0 && existing.out.startsWith("http")) return { url: existing.out, created: false };
   const commits = await git(ws.id, ["log", `${s.baseBranch}..${s.branch}`, "--pretty=format:- %s (%an)"]);
@@ -246,7 +314,7 @@ export async function openPullRequest(ws: Workspace) {
 export async function gitStatus(ws: Workspace) {
   const s = settingsOf(ws);
   const t = await tools();
-  if (!s.enabled || !(await isRepo(ws.id))) return { settings: s, tools: t, repo: false as const };
+  if (!s.enabled || !(await ensureRepo(ws).catch(() => false))) return { settings: s, tools: t, repo: false as const };
   const [branch, status, log, ahead] = await Promise.all([
     git(ws.id, ["rev-parse", "--abbrev-ref", "HEAD"]),
     git(ws.id, ["status", "--porcelain"]),
@@ -289,4 +357,100 @@ export async function autoCommitRun(ws: Workspace, info: { ticketNumber: number;
     }
   }
   return sha ? { sha, pushed, pushError } : null;
+}
+
+// ---------------------------------------------------------------- Source Control view (IDE)
+
+export type ScmStatus = "M" | "A" | "D" | "U" | "R" | "C";
+export interface ScmChange {
+  path: string;
+  status: ScmStatus;
+  staged: boolean;
+  from?: string;
+}
+
+const safeRel = (p: string) => {
+  if (!p || p.startsWith("-") || p.startsWith("/") || p.split("/").includes("..") || p.startsWith(".git/")) throw new Error(`Invalid path: ${p}`);
+  return p;
+};
+
+/** Changes in the working tree and index, like VS Code's Source Control view. */
+export async function scmStatus(ws: Workspace) {
+  const s = settingsOf(ws);
+  const installed = (await runProcess("git", ["--version"], { env: env(), timeoutMs: 5000 })).code === 0;
+  if (!installed) return { repo: false as const, installed };
+  if (!s.enabled || !(await ensureRepo(ws).catch(() => false))) return { repo: false as const, installed };
+  const [st, branch, last] = await Promise.all([
+    git(ws.id, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]),
+    git(ws.id, ["rev-parse", "--abbrev-ref", "HEAD"]),
+    git(ws.id, ["log", "-n", "1", "--pretty=format:%h%x1f%s%x1f%aI"]),
+  ]);
+  const staged: ScmChange[] = [];
+  const changes: ScmChange[] = [];
+  const parts = st.stdout.split("\0");
+  for (let i = 0; i < parts.length; i++) {
+    const e = parts[i];
+    if (e.length < 4) continue;
+    const x = e[0];
+    const y = e[1];
+    const p = e.slice(3);
+    let from: string | undefined;
+    if (x === "R" || x === "C") from = parts[++i];
+    if (x === "?" && y === "?") {
+      changes.push({ path: p, status: "U", staged: false });
+      continue;
+    }
+    if (x !== " " && x !== "?") staged.push({ path: p, status: (x === "T" ? "M" : x) as ScmStatus, staged: true, from });
+    if (y !== " " && y !== "?") changes.push({ path: p, status: (y === "T" ? "M" : y) as ScmStatus, staged: false });
+  }
+  let ahead: number | null = null;
+  let behind: number | null = null;
+  if (s.remoteUrl) {
+    const r = await git(ws.id, ["rev-list", "--left-right", "--count", `origin/${branch.out}...${branch.out}`]);
+    if (r.code === 0) [behind, ahead] = r.out.split(/\s+/).map(Number);
+  }
+  const [sha, subject, date] = last.out.split("\x1f");
+  return {
+    repo: true as const,
+    installed,
+    branch: branch.out,
+    remote: s.remoteUrl ?? null,
+    autoCommit: s.autoCommit,
+    ahead,
+    behind,
+    staged,
+    changes,
+    lastCommit: sha ? { sha, subject, date } : null,
+  };
+}
+
+export async function scmStage(ws: Workspace, paths: string[], stage: boolean) {
+  if (!(await ensureRepo(ws))) throw new Error("Turn on source control first.");
+  const list = paths.map(safeRel);
+  if (!list.length) return;
+  if (stage) await must(ws.id, ["add", "-A", "--", ...list], "Staging");
+  else await must(ws.id, ["reset", "-q", "--", ...list], "Unstaging");
+  publish(ws.id, { kind: "git", workspaceId: ws.id });
+}
+
+/** A file's content at HEAD or in the index (null when it doesn't exist there). */
+export async function scmShow(ws: Workspace, p: string, ref: "HEAD" | "INDEX") {
+  if (!(await ensureRepo(ws).catch(() => false))) return null;
+  const r = await git(ws.id, ["show", `${ref === "HEAD" ? "HEAD" : ""}:${safeRel(p)}`]);
+  return r.code === 0 ? r.stdout : null;
+}
+
+export async function scmCommit(ws: Workspace, message: string, opts: { all?: boolean; author?: { name: string; email?: string } } = {}) {
+  const s = settingsOf(ws);
+  if (!message.trim()) throw new Error("Write a commit message first.");
+  if (!(await ensureRepo(ws))) throw new Error("Turn on source control first.");
+  await ensureBranch(ws.id, s.branch);
+  if (opts.all) await must(ws.id, ["add", "-A"], "git add");
+  if ((await git(ws.id, ["diff", "--cached", "--quiet"])).code === 0) throw new Error("There are no staged changes to commit.");
+  const args = ["commit", "-q", "-m", message.trim()];
+  if (opts.author) args.push("--author", `${opts.author.name} <${opts.author.email ?? "you@luma.local"}>`);
+  await must(ws.id, args, "git commit");
+  const sha = await must(ws.id, ["rev-parse", "--short", "HEAD"], "git rev-parse");
+  publish(ws.id, { kind: "git", workspaceId: ws.id });
+  return sha;
 }

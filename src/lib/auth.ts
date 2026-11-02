@@ -106,6 +106,11 @@ export function runWithUser<T>(ctx: Ctx, fn: () => T) {
   return als.run(ctx, fn);
 }
 
+/** Run background work (agent runs, deploys) without the request's signed-in person attached. */
+export function runDetached<T>(fn: () => T) {
+  return als.exit(fn);
+}
+
 // ---------------------------------------------------------------- roles
 
 const RANK: Record<WorkspaceRole, number> = { viewer: 1, editor: 2, owner: 3 };
@@ -152,6 +157,7 @@ const ADMIN_ONLY: { re: RegExp; methods: string[] }[] = [
   { re: /^\/api\/settings$/, methods: ["POST", "PUT", "PATCH", "DELETE"] },
   { re: /^\/api\/usage$/, methods: ["GET"] },
   { re: /^\/api\/users(\/|$)/, methods: ["GET", "POST", "PATCH", "DELETE"] },
+  { re: /^\/api\/system(\/|$)/, methods: ["GET", "POST", "PATCH", "DELETE"] },
 ];
 
 /**

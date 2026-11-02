@@ -8,7 +8,14 @@ type P = Ctx<{ id: string }>;
 /** Admin: change someone's Luma role. */
 export const PATCH = handle(async (req: Request, { params }: P) => {
   const { id } = await params;
-  const { role } = (await req.json()) as { role: "admin" | "member" };
+  const body = (await req.json()) as { role?: "admin" | "member"; resetLink?: boolean };
+  if (body.resetLink) {
+    const { read } = await import("@/lib/store");
+    if (!(await read()).users.some((u) => u.id === id)) return fail("User not found", 404);
+    const { createResetLink } = await import("@/lib/resets");
+    return ok({ path: await createResetLink(id) });
+  }
+  const role = body.role;
   if (role !== "admin" && role !== "member") return fail("Role must be admin or member.");
   const user = await mutate((db) => {
     const u = db.users.find((x) => x.id === id);

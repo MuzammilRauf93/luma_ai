@@ -19,5 +19,5 @@ export const GET = handle(async () => {
 /** Admin: invite someone to Luma (optionally straight into a workspace). */
 export const POST = handle(async (req: Request) => {
   const body = (await req.json()) as { email: string; role?: "admin" | "member" };
-  return ok(await createInvite({ email: body.email, role: body.role === "admin" ? "admin" : "member", createdBy: currentUser()!.id }), 201);
+  return ok(await createInvite({ email: body.email, role: body.role === "admin" ? "admin" : "member", createdBy: currentUser()!.id, origin: new URL(req.url).origin }), 201);
 });

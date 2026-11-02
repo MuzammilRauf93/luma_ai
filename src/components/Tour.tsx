@@ -63,8 +63,8 @@ const STEPS: Step[] = [
   {
     route: "editor",
     target: "editor",
-    title: "Code & preview",
-    body: "See the project live, edit any file yourself, and use History to view a diff of every change or roll it back. Open the Terminal to see the checks agents run (tests, analyzers) or run one yourself.",
+    title: "Code editor & review",
+    body: "A VS Code-style editor with the same shortcuts (⌘P, ⌘⇧P, ⌘B…). Review what agents changed in Code Review: read the diff, comment on lines, then Approve or Request Changes. Simple mode shows just the live result.",
   },
   {
     route: "ship",

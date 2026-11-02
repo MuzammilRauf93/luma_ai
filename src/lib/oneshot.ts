@@ -24,7 +24,7 @@ export async function complete(system: string, prompt: string, maxTokens = 2000)
         settingSources: [],
         persistSession: false,
         cwd: await sdkCwd(),
-        env: accountEnv(),
+        env: await accountEnv(),
       },
     });
     let out = "";

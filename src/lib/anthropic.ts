@@ -9,7 +9,10 @@ export async function getApiKey(): Promise<string | null> {
   try {
     return await decrypt(db.settings.encryptedApiKey);
   } catch {
-    return null;
+    // Saved on another machine/process with a different encryption secret.
+    throw new Error(
+      "This Luma server can't unlock the saved API key. When Luma runs on more than one machine or process (Postgres + workers), set the same LUMA_SECRET on every one of them, then reconnect in Settings.",
+    );
   }
 }
 

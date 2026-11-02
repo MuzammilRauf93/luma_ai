@@ -4,6 +4,9 @@ import path from "path";
 import crypto from "crypto";
 import { DATA_DIR, mutate, newId, now } from "./store";
 import { currentUser } from "./auth";
+import { dropWorkspace, fetchBlob, pull, pushBlob, pushFile } from "./fileMirror";
+
+type ReadOpts = { skipPull?: boolean };
 
 /**
  * Per-workspace file storage on disk, with a checkpoint written for every change
@@ -42,8 +45,9 @@ export interface FileEntry {
   size: number;
 }
 
-export async function listFiles(workspaceId: string): Promise<FileEntry[]> {
+export async function listFiles(workspaceId: string, opts: ReadOpts = {}): Promise<FileEntry[]> {
   const root = workspaceRoot(workspaceId);
+  if (!opts.skipPull) await pull(workspaceId);
   const out: FileEntry[] = [];
   async function walk(dir: string) {
     let entries: import("fs").Dirent[];
@@ -68,8 +72,9 @@ export async function listFiles(workspaceId: string): Promise<FileEntry[]> {
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-export async function readFile(workspaceId: string, rel: string): Promise<string | null> {
+export async function readFile(workspaceId: string, rel: string, opts: ReadOpts = {}): Promise<string | null> {
   const { abs } = safePath(workspaceId, rel);
+  if (!opts.skipPull) await pull(workspaceId);
   try {
     return await fs.readFile(abs, "utf8");
   } catch {
@@ -77,8 +82,9 @@ export async function readFile(workspaceId: string, rel: string): Promise<string
   }
 }
 
-export async function readFileBuffer(workspaceId: string, rel: string): Promise<Buffer | null> {
+export async function readFileBuffer(workspaceId: string, rel: string, opts: ReadOpts = {}): Promise<Buffer | null> {
   const { abs } = safePath(workspaceId, rel);
+  if (!opts.skipPull) await pull(workspaceId);
   try {
     return await fs.readFile(abs);
   } catch {
@@ -95,13 +101,24 @@ async function putBlob(workspaceId: string, content: string) {
     await fs.access(file);
   } catch {
     await fs.writeFile(file, content);
+    await pushBlob(workspaceId, id, content);
   }
   return id;
 }
 
 export async function getBlob(workspaceId: string, blobId: string) {
   if (!/^[a-f0-9]+$/.test(blobId)) throw new Error("Invalid blob id");
-  return fs.readFile(path.join(blobDir(workspaceId), blobId), "utf8");
+  const file = path.join(blobDir(workspaceId), blobId);
+  try {
+    return await fs.readFile(file, "utf8");
+  } catch (err) {
+    // Fresh host: fetch the checkpoint from Postgres and cache it.
+    const remote = await fetchBlob(workspaceId, blobId);
+    if (remote === null) throw err;
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, remote);
+    return remote;
+  }
 }
 
 interface ChangeOpts {
@@ -139,6 +156,7 @@ export async function writeFile(workspaceId: string, relIn: string, content: str
   if (before === content) return { rel, created: false, changed: false };
   await fs.mkdir(path.dirname(abs), { recursive: true });
   await fs.writeFile(abs, content);
+  await pushFile(workspaceId, rel, Buffer.from(content));
   await recordCheckpoint(workspaceId, rel, before, content, opts);
   return { rel, created: before === null, changed: true };
 }
@@ -148,6 +166,7 @@ export async function deleteFile(workspaceId: string, relIn: string, opts: Chang
   const before = await readFile(workspaceId, rel);
   if (before === null) return false;
   await fs.unlink(abs);
+  await pushFile(workspaceId, rel, null);
   await recordCheckpoint(workspaceId, rel, before, null, opts);
   // tidy up now-empty folders
   let dir = path.dirname(abs);
@@ -186,11 +205,22 @@ export async function initWorkspaceFiles(workspaceId: string, files: Record<stri
     const { abs } = safePath(workspaceId, rel);
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, content);
+    await pushFile(workspaceId, rel, Buffer.from(content));
+  }
+}
+
+/** Mirror files that something other than Luma's file functions changed (commands, git pull). */
+export async function syncChanged(workspaceId: string, rels: string[]) {
+  for (const rel of rels) {
+    const { abs } = safePath(workspaceId, rel);
+    const buf = await fs.readFile(abs).catch(() => null);
+    await pushFile(workspaceId, rel, buf);
   }
 }
 
 export async function removeWorkspaceFiles(workspaceId: string) {
   workspaceRoot(workspaceId); // validates id
+  await dropWorkspace(workspaceId);
   await fs.rm(path.join(DATA_DIR, "workspaces", workspaceId), { recursive: true, force: true });
 }
 

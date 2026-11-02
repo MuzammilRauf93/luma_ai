@@ -45,3 +45,18 @@ export async function decrypt(payload: string): Promise<string> {
 export function maskKey(key: string) {
   return `${key.slice(0, 7)}…${key.slice(-4)}`;
 }
+
+/** Short-lived signed capability, e.g. for sandboxed previews that can't carry the session cookie. */
+export async function signScoped(scope: string, ttlSec = 12 * 3600): Promise<string> {
+  const exp = Math.floor(Date.now() / 1000) + ttlSec;
+  const mac = crypto.createHmac("sha256", await getKey()).update(`${scope}|${exp}`).digest("base64url").slice(0, 32);
+  return `${exp.toString(36)}.${mac}`;
+}
+
+export async function verifyScoped(scope: string, token: string): Promise<boolean> {
+  const [e, mac] = token.split(".");
+  const exp = parseInt(e ?? "", 36);
+  if (!mac || !exp || exp < Date.now() / 1000) return false;
+  const want = crypto.createHmac("sha256", await getKey()).update(`${scope}|${exp}`).digest("base64url").slice(0, 32);
+  return mac.length === want.length && crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(want));
+}
