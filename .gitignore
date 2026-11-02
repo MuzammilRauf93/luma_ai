@@ -1,0 +1,13 @@
+node_modules
+.next
+.luma
+.env*.local
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+public/monaco
+
+# Local-only
+.phase1-backup/
+smoke-report-*.md
+.env
